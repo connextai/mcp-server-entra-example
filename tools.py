@@ -104,7 +104,32 @@ def register_tools(mcp: FastMCP) -> None:
         result = secrets.randbelow(sides) + 1
         return f"{_current_user()} rolled a {result} (1–{sides})."
 
-    # --- 2. An MCP App: a tool that returns an HTML UI -------------------
+    # --- 2. A "who am I" tool --------------------------------------------
+    # The clearest way to confirm auth works end to end: it echoes back the
+    # identity the server read from your *verified* Entra access token. If this
+    # returns your name, the whole chain (Entra login -> token -> validation ->
+    # tool) is working.
+    @mcp.tool(
+        name="whoami",
+        description="Return the identity of the calling user, read from the verified access token.",
+    )
+    async def whoami() -> ToolResult:
+        token = get_access_token()
+        claims = (getattr(token, "claims", None) or {}) if token else {}
+        info = {
+            "name": claims.get("name"),
+            "username": claims.get("preferred_username") or claims.get("upn") or claims.get("email"),
+            "object_id": claims.get("oid"),      # the user's stable id in the tenant
+            "tenant_id": claims.get("tid"),
+            "scopes": claims.get("scp"),
+        }
+        detail = f" ({info['username']})" if info["username"] else ""
+        return ToolResult(
+            content=[TextContent(type="text", text=f"You are {_current_user()}{detail}.")],
+            structured_content=info,
+        )
+
+    # --- 3. An MCP App: a tool that returns an HTML UI -------------------
     # The `meta.ui` block on the tool DEFINITION tells the host this tool has a
     # UI and where its template lives. `visibility` is advisory — the Connext
     # admin still has to allow UI for this server.

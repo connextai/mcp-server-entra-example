@@ -43,19 +43,64 @@ You write only step 3's tools. FastMCP verifies the token; Entra does 1–2.
 
 ---
 
-## Set up the Azure App Registration
+## Getting your Azure values (step by step)
 
-A token verifier needs an App Registration that **exposes an API**:
+A token verifier needs an App Registration that **exposes an API**. You end up
+with three values — `AZURE_CLIENT_ID`, `AZURE_TENANT_ID`, `AZURE_REQUIRED_SCOPES`
+— and **no client secret** (a secret is only needed to *obtain* tokens, which
+this server never does).
 
-1. **Azure Portal → App registrations → New registration.** Note the
-   **Application (client) ID** and **Directory (tenant) ID**.
-2. **Expose an API → Set** the Application ID URI (defaults to `api://<client-id>`).
-3. **Expose an API → Add a scope**, e.g. `access_as_user`. This is the value you
-   put in `AZURE_REQUIRED_SCOPES`.
-4. In the app **Manifest**, set `"requestedAccessTokenVersion": 2` (v2 tokens).
+Do everything in the **Microsoft Entra admin center** ([entra.microsoft.com](https://entra.microsoft.com))
+or the Azure Portal ([portal.azure.com](https://portal.azure.com) → *Microsoft Entra ID*).
 
-That's it — **no client secret** is required to *verify* tokens. (A secret is
-only needed if a server has to *obtain* tokens itself; this one doesn't.)
+### 1. Create the app registration
+- **Identity → Applications → App registrations → New registration.**
+  > ⚠️ It must be **App registrations**, not **Enterprise applications** — only
+  > App registrations have the "Expose an API" page you need in step 3.
+- Give it a name (e.g. `mcp-server-entra-example`) → **Register**.
+
+### 2. Copy the two IDs → `AZURE_CLIENT_ID` and `AZURE_TENANT_ID`
+On the app's **Overview** page:
+- **Application (client) ID** → this is `AZURE_CLIENT_ID`
+- **Directory (tenant) ID** → this is `AZURE_TENANT_ID`
+
+Both are plain GUIDs and are **not secret**. (The tenant ID is the same across
+your whole Entra directory — if you already use Microsoft 365 / Entra SSO, it's
+the GUID in your SAML issuer `https://sts.windows.net/<tenant-id>/`.)
+
+### 3. Expose an API → add a scope → `AZURE_REQUIRED_SCOPES`
+In the app's left menu, **Manage → Expose an API**:
+- If **Application ID URI** isn't set yet, click **Add** / **Set** and accept the
+  default `api://<client-id>` → **Save**.
+- **+ Add a scope**:
+  - **Scope name:** `access_as_user`  ← this is your `AZURE_REQUIRED_SCOPES`
+  - **Who can consent:** *Admins and users*
+  - Fill the admin consent display name/description (anything) → **State: Enabled**
+  - **Add scope**
+
+The full scope is now `api://<client-id>/access_as_user`. (Any leftover default
+scope like `user_impersonation` is harmless — the server only checks for the
+name in `AZURE_REQUIRED_SCOPES`.)
+
+### 4. Force v2 tokens
+**Manage → Manifest** → set `"requestedAccessTokenVersion": 2` → **Save**. This
+makes Entra issue **v2** access tokens, whose issuer is
+`https://login.microsoftonline.com/<tenant-id>/v2.0` — which is what this server
+validates against.
+
+### 5. (Only if you'll test with the Azure CLI) authorize the CLI
+To let `az` mint a token for your custom API, either consent when prompted, or
+pre-authorize it: **Expose an API → Authorized client applications → Add a
+client application** → Azure CLI id `04b07795-8ddb-461a-bbee-02f9e1bf7b46` →
+tick your `access_as_user` scope.
+
+### Recap — how the values map
+| App registration field | Env var |
+| --- | --- |
+| Application (client) ID | `AZURE_CLIENT_ID` |
+| Directory (tenant) ID | `AZURE_TENANT_ID` |
+| Expose an API → scope name | `AZURE_REQUIRED_SCOPES` (e.g. `access_as_user`) |
+| *(nothing — no secret needed)* | — |
 
 ---
 
@@ -78,12 +123,14 @@ python server.py
 # 3. in another terminal, get a token and call the server as a client would
 az login
 export MCP_ACCESS_TOKEN=$(az account get-access-token \
-  --scope api://$AZURE_CLIENT_ID/.default --query accessToken -o tsv)
+  --scope api://$AZURE_CLIENT_ID/access_as_user --query accessToken -o tsv)
 python examples/connect_with_client.py
 ```
 
-Tools run **as the Entra user**: `roll_dice` and `greeting_card` read the
-caller's name from the token's claims (see `_current_user()` in `tools.py`).
+Tools run **as the Entra user**: `whoami`, `roll_dice` and `greeting_card` read
+the caller's identity from the token's claims (see `_current_user()` in
+`tools.py`). The quickest way to confirm the whole flow works is to call
+**`whoami`** — it just returns your name back to you.
 
 ---
 
@@ -115,7 +162,7 @@ RFC 9728 will discover where to get a token.
 | ---- | ------------ |
 | `server.py` | Entry point. Builds the FastMCP server with Entra auth, registers tools, adds `/health`, runs it. |
 | `auth.py` | **The only real difference from `mcp-server-example`.** Builds an `AzureJWTVerifier` + `RemoteAuthProvider` from env config. No login page, no user store, no secret. |
-| `tools.py` | The two example tools + the `ui://` MCP App resource. Identical to `mcp-server-example` except identity is read from Entra token claims. |
+| `tools.py` | The example tools (`whoami`, `roll_dice`, `greeting_card`) + the `ui://` MCP App resource. Identity is read from Entra token claims. |
 | `examples/connect_with_client.py` | A client that calls the server with a bearer token you obtained from Entra. |
 | `.env.example` | Configuration (`AZURE_*`, `PUBLIC_URL`, `HOST`, `PORT`). |
 
