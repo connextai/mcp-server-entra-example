@@ -178,5 +178,11 @@ RFC 9728 will discover where to get a token.
   app-role or group checks in your tools if needed (both are in the token claims).
 - **HTTPS:** terminate TLS in front and set `PUBLIC_URL` to the `https://` URL so
   the advertised metadata is correct.
-- **Clock/JWKS:** FastMCP caches Entra's JWKS and honours token expiry; no state
-  of your own to persist, so this scales horizontally with no shared store.
+- **Clock/JWKS:** FastMCP caches Entra's JWKS and honours token expiry — there is
+  no *auth* state to persist (no secret, no stored tokens).
+- **Scaling / replicas:** note that while auth is stateless, the MCP
+  streamable-HTTP transport keeps **per-session** state in memory (`initialize`
+  → `Mcp-Session-Id` → follow-up calls). To run more than one replica you need
+  session stickiness or a shared session store, otherwise a client's follow-up
+  request can land on another pod and get *"Session not found"*. This example
+  runs a single replica for simplicity.
