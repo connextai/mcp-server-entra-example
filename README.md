@@ -102,6 +102,11 @@ tick your `access_as_user` scope.
 | Expose an API → scope name | `AZURE_REQUIRED_SCOPES` (e.g. `access_as_user`) |
 | *(nothing — no secret needed)* | — |
 
+> These three values are all the **server** needs. To connect it **through
+> Connext**, you'll add a **client secret** and a **redirect URI** to this same
+> app registration — those are used by Connext (the OAuth client), not by this
+> server. See [Connecting it to Connext](#connecting-it-to-connext).
+
 ---
 
 ## Quick start
@@ -134,25 +139,62 @@ the caller's identity from the token's claims (see `_current_user()` in
 
 ---
 
-## Connecting it to Connext — read this first
+## Connecting it to Connext
 
-Because this server only *verifies* tokens (it is not an authorization server),
-connecting it to Connext is **not** the same one-click OAuth flow as
-`mcp-server-example`. Connext registers MCP clients dynamically (RFC 7591 DCR),
-but **Entra does not support DCR**, so Connext cannot self-register with Entra
-automatically. In practice you use this pattern when the caller can already
-present an Entra token — for example a **pre-registered confidential client**,
-a gateway that attaches the token, or service-to-service calls.
+Connext connects to this server over OAuth and lets users **sign in with
+Microsoft**. Because the server delegates identity to **Entra** — which does
+**not** support RFC 7591 dynamic client registration — you register Connext as a
+client of Entra by hand: you supply a **client id + client secret** when adding
+the server. (Contrast the self-hosted [`mcp-server-example`](../mcp-server-example),
+where you leave those blank and Connext self-registers via DCR.)
 
-> If what you want is the full "user clicks Connect → signs in with Microsoft"
-> experience *through Connext*, use FastMCP's `AzureProvider` instead (the OAuth
-> **proxy** pattern): it presents a DCR-capable OAuth server to Connext while
-> proxying the actual login to Entra. This repo intentionally shows the simpler,
-> secret-free **verification** half of the story.
+> **Platform requirement.** Connext has to speak Entra's enterprise OAuth dialect:
+> fall back to **OpenID Connect discovery** (Entra publishes no RFC 8414 doc),
+> request the **resource's** scope (`api://<client-id>/access_as_user`, per RFC
+> 9728 — not the AS's generic OIDC scopes), and **omit** the RFC 8707 `resource`
+> indicator for Entra. Recent connext-core does all three. On an older build the
+> connect fails with *"Could not connect to the MCP server URL"* (discovery) or
+> `AADSTS9010010: The resource parameter … doesn't match with the requested
+> scopes`.
 
-The server still advertises Entra correctly in its protected-resource metadata
-(`/.well-known/oauth-protected-resource/mcp`), so any client that speaks
-RFC 9728 will discover where to get a token.
+### Extra Entra app-registration steps (for the Connext OAuth flow)
+
+These are what **Connext-as-OAuth-client** needs — all on the **same** app
+registration you set up above:
+
+1. **Client secret** — **Manage → Certificates & secrets → New client secret** →
+   copy the **Value**. Connext uses it to exchange the auth code; it's stored
+   encrypted **in Connext**, not in this server. (The server itself still needs
+   no secret — it only verifies tokens.)
+2. **Redirect URI (reply URL)** — **Manage → Authentication → Add a platform →
+   Web → Redirect URIs** → add Connext's MCP OAuth callback, e.g.
+   `https://<your-connext-host>/api/v1/oauth/mcp/callback` → **Save**.
+   - Must be a **Web** platform (Connext is a confidential client), an **exact**
+     match, no trailing slash. If sign-in returns `AADSTS500113: No reply address
+     is registered for the application`, this step is missing or the URL differs.
+     The exact value is the `redirect_uri` in the failing `/authorize` URL.
+3. *(Optional)* **API permissions → Grant admin consent** for `access_as_user`,
+   so users don't see a one-time consent screen on first connect.
+
+### Register in Connext
+
+**Admin → MCP Servers → Add:**
+- **URL:** your public MCP endpoint (e.g. `https://mcp.example.com/mcp`)
+- **Auth:** OAuth · **Client id:** your `AZURE_CLIENT_ID` · **Client secret:** step 1's value
+
+Then each user clicks **Connect** **once** and signs in with Microsoft — a silent
+SSO redirect if they're already signed into Connext via Entra (no password). The
+server requests `offline_access`, so Connext keeps a refresh token and the
+connection **persists** (no reconnecting).
+
+### Alternative: `AzureProvider` (server-side OAuth proxy)
+
+If your MCP platform *doesn't* bridge enterprise IdPs, FastMCP's `AzureProvider`
+moves the bridge into the **server**: it presents a DCR-capable OAuth server to
+the client and proxies the login to Entra (the client then connects with blank
+creds), at the cost of a client secret + redirect URI on the *server* side. This
+repo shows the simpler token-verifier; reach for `AzureProvider` when the server
+must be self-contained.
 
 ---
 
